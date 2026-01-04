@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Highway Airplane Drive</title>
+  <style>
+    html, body {
+      margin: 0;
+      padding: 0;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: #0b1d2a;
+      font-family: Arial, sans-serif;
+      color: #eef2f5;
+      user-select: none;
+    }
+    #ui {
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      background: rgba(0, 0, 0, 0.4);
+      padding: 10px 12px;
+      border-radius: 8px;
+      font-size: 14px;
+      line-height: 1.4;
+    }
+    canvas {
+      display: block;
+    }
+  </style>
+</head>
+<body>
+  <div id="ui">
+    <div><strong>Controls:</strong> ← → steer | ↑ accelerate | ↓ brake</div>
+    <div id="speed">Speed: 0 km/h</div>
+  </div>
+  <canvas id="c"></canvas>
+  <script>
+    const canvas = document.getElementById('c');
+    const ctx = canvas.getContext('2d');
+    let w = window.innerWidth;
+    let h = window.innerHeight;
+    canvas.width = w;
+    canvas.height = h;
+
+    window.addEventListener('resize', () => {
+      w = window.innerWidth;
+      h = window.innerHeight;
+      canvas.width = w;
+      canvas.height = h;
+    });
+
+    const plane = {
+      x: 0,
+      y: 0,
+      width: 40,
+      height: 70,
+      color: '#cfd3ff',
+      speed: 0,
+      angle: 0,
+    };
+
+    const road = {
+      width: Math.min(500, w * 0.6),
+      laneCount: 3,
+      lineOffset: 0,
+    };
+
+    const state = {
+      keys: {},
+      maxSpeed: 220 / 3.6, // m/s (approx 220 km/h)
+      accel: 4.0, // m/s^2
+      brake: 7.0,
+      friction: 1.5,
+      steerSpeed: 120, // pixels/sec lateral
+    };
+
+    function reset() {
+      plane.x = w / 2;
+      plane.y = h * 0.75;
+      plane.speed = 0;
+      road.width = Math.min(500, w * 0.6);
+    }
+    reset();
+
+    window.addEventListener('keydown', (e) => {
+      state.keys[e.key] = true;
+    });
+    window.addEventListener('keyup', (e) => {
+      state.keys[e.key] = false;
+    });
+
+    function update(dt) {
+      // Forward/backward speed control
+      if (state.keys['ArrowUp']) {
+        plane.speed += state.accel * dt;
+      }
+      if (state.keys['ArrowDown']) {
+        plane.speed -= state.brake * dt;
+      }
+      // friction
+      if (!state.keys['ArrowUp'] && !state.keys['ArrowDown']) {
+        if (plane.speed > 0) {
+          plane.speed = Math.max(0, plane.speed - state.friction * dt);
+        } else {
+          plane.speed = Math.min(0, plane.speed + state.friction * dt);
+        }
+      }
+
+      plane.speed = Math.max(0, Math.min(state.maxSpeed, plane.speed));
+
+      // Steering
+      const steerDir = (state.keys['ArrowLeft'] ? -1 : 0) + (state.keys['ArrowRight'] ? 1 : 0);
+      plane.x += steerDir * state.steerSpeed * dt;
+      const halfRoad = road.width / 2 - plane.width / 2 - 10;
+      const center = w / 2;
+      if (plane.x < center - halfRoad) plane.x = center - halfRoad;
+      if (plane.x > center + halfRoad) plane.x = center + halfRoad;
+
+      // Road markings scroll
+      road.lineOffset += plane.speed * dt * 25;
+      if (road.lineOffset > 40) road.lineOffset = 0;
+
+      document.getElementById('speed').textContent = `Speed: ${(plane.speed * 3.6).toFixed(0)} km/h`;
+    }
+
+    function drawRoad() {
+      ctx.save();
+      ctx.translate(w / 2, 0);
+
+      // asphalt
+      ctx.fillStyle = '#2c2c2c';
+      ctx.fillRect(-road.width / 2, 0, road.width, h);
+
+      // side lines
+      ctx.fillStyle = '#e0e0e0';
+      ctx.fillRect(-road.width / 2 + 10, 0, 6, h);
+      ctx.fillRect(road.width / 2 - 16, 0, 6, h);
+
+      // lane markers
+      const laneWidth = road.width / road.laneCount;
+      ctx.strokeStyle = '#f8f8f8';
+      ctx.lineWidth = 4;
+      ctx.setLineDash([25, 25]);
+      for (let i = 1; i < road.laneCount; i++) {
+        ctx.beginPath();
+        const x = -road.width / 2 + i * laneWidth;
+        ctx.moveTo(x, -40 + road.lineOffset);
+        ctx.lineTo(x, h + 40 + road.lineOffset);
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
+
+    function drawPlane() {
+      ctx.save();
+      ctx.translate(plane.x, plane.y);
+      ctx.fillStyle = plane.color;
+      // body
+      ctx.fillRect(-plane.width / 2, -plane.height / 2, plane.width, plane.height);
+      // nose
+      ctx.beginPath();
+      ctx.moveTo(-plane.width / 2, -plane.height / 2);
+      ctx.lineTo(plane.width / 2, -plane.height / 2);
+      ctx.lineTo(0, -plane.height / 2 - 16);
+      ctx.closePath();
+      ctx.fill();
+      // wings
+      ctx.fillRect(-plane.width - 10, -plane.height / 3, plane.width * 2 + 20, plane.height / 6);
+      // tail
+      ctx.fillRect(-plane.width / 4, plane.height / 2 - 10, plane.width / 2, 16);
+      ctx.restore();
+    }
+
+    let last = performance.now();
+    function loop(t) {
+      const dt = Math.min(0.033, (t - last) / 1000);
+      last = t;
+      update(dt);
+      ctx.clearRect(0, 0, w, h);
+      drawRoad();
+      drawPlane();
+      requestAnimationFrame(loop);
+    }
+    requestAnimationFrame(loop);
+  </script>
+</body>
+</html>

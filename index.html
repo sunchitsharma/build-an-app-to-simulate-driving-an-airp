@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Highway Airplane Drive</title>
+  <title>A380 Cockpit Drive</title>
   <style>
     html, body {
       margin: 0;
@@ -25,6 +25,7 @@
       border-radius: 8px;
       font-size: 14px;
       line-height: 1.4;
+      z-index: 10;
     }
     canvas {
       display: block;
@@ -35,6 +36,7 @@
   <div id="ui">
     <div><strong>Controls:</strong> ← → steer | ↑ accelerate | ↓ brake</div>
     <div id="speed">Speed: 0 km/h</div>
+    <div id="status"></div>
   </div>
   <canvas id="c"></canvas>
   <script>
@@ -54,123 +56,208 @@
 
     const plane = {
       x: 0,
-      y: 0,
-      width: 40,
-      height: 70,
-      color: '#cfd3ff',
+      width: 1.2, // lane units
       speed: 0,
-      angle: 0,
     };
 
     const road = {
-      width: Math.min(500, w * 0.6),
       laneCount: 3,
-      lineOffset: 0,
+      laneWidth: 1.5, // world units
+      widthWorld() { return this.laneCount * this.laneWidth; }
     };
+
+    const obstacles = [];
+    let spawnTimer = 0;
 
     const state = {
       keys: {},
-      maxSpeed: 220 / 3.6, // m/s (approx 220 km/h)
-      accel: 4.0, // m/s^2
+      maxSpeed: 220 / 3.6, // m/s
+      accel: 4.0,
       brake: 7.0,
       friction: 1.5,
-      steerSpeed: 120, // pixels/sec lateral
+      steerSpeed: 2.2, // world units per sec
+      gameOver: false,
     };
 
     function reset() {
-      plane.x = w / 2;
-      plane.y = h * 0.75;
+      plane.x = 0;
       plane.speed = 0;
-      road.width = Math.min(500, w * 0.6);
+      obstacles.length = 0;
+      spawnTimer = 0;
+      state.gameOver = false;
+      document.getElementById('status').textContent = '';
     }
     reset();
 
     window.addEventListener('keydown', (e) => {
       state.keys[e.key] = true;
+      if (state.gameOver && e.key === ' ') reset();
     });
     window.addEventListener('keyup', (e) => {
       state.keys[e.key] = false;
     });
 
     function update(dt) {
-      // Forward/backward speed control
-      if (state.keys['ArrowUp']) {
-        plane.speed += state.accel * dt;
-      }
-      if (state.keys['ArrowDown']) {
-        plane.speed -= state.brake * dt;
-      }
-      // friction
+      if (state.gameOver) return;
+      // speed control
+      if (state.keys['ArrowUp']) plane.speed += state.accel * dt;
+      if (state.keys['ArrowDown']) plane.speed -= state.brake * dt;
       if (!state.keys['ArrowUp'] && !state.keys['ArrowDown']) {
-        if (plane.speed > 0) {
-          plane.speed = Math.max(0, plane.speed - state.friction * dt);
-        } else {
-          plane.speed = Math.min(0, plane.speed + state.friction * dt);
-        }
+        if (plane.speed > 0) plane.speed = Math.max(0, plane.speed - state.friction * dt);
       }
-
       plane.speed = Math.max(0, Math.min(state.maxSpeed, plane.speed));
 
-      // Steering
+      // steering
       const steerDir = (state.keys['ArrowLeft'] ? -1 : 0) + (state.keys['ArrowRight'] ? 1 : 0);
       plane.x += steerDir * state.steerSpeed * dt;
-      const halfRoad = road.width / 2 - plane.width / 2 - 10;
-      const center = w / 2;
-      if (plane.x < center - halfRoad) plane.x = center - halfRoad;
-      if (plane.x > center + halfRoad) plane.x = center + halfRoad;
+      const halfRoad = (road.widthWorld() / 2) - (plane.width / 2) - 0.1;
+      if (plane.x < -halfRoad) plane.x = -halfRoad;
+      if (plane.x > halfRoad) plane.x = halfRoad;
 
-      // Road markings scroll
-      road.lineOffset += plane.speed * dt * 25;
-      if (road.lineOffset > 40) road.lineOffset = 0;
+      // move world (z axis decreases as we move forward)
+      for (const o of obstacles) {
+        o.z -= plane.speed * dt;
+      }
+      // remove passed
+      for (let i = obstacles.length - 1; i >= 0; i--) {
+        if (obstacles[i].z < -5) obstacles.splice(i, 1);
+      }
+
+      // spawn
+      spawnTimer -= dt;
+      if (spawnTimer <= 0) {
+        spawnTimer = 1.2 + Math.random() * 1.2;
+        const lane = Math.floor(Math.random() * road.laneCount) - Math.floor(road.laneCount / 2);
+        obstacles.push({ lane, z: 300 + Math.random() * 120, width: 1.0, depth: 6 });
+      }
+
+      // collision (simple)
+      for (const o of obstacles) {
+        if (Math.abs(plane.x - o.lane * road.laneWidth) < (plane.width / 2 + o.width / 2) && o.z < 8 && o.z > -1) {
+          state.gameOver = true;
+          document.getElementById('status').textContent = 'Collision! Press Space to reset.';
+        }
+      }
 
       document.getElementById('speed').textContent = `Speed: ${(plane.speed * 3.6).toFixed(0)} km/h`;
     }
 
-    function drawRoad() {
-      ctx.save();
-      ctx.translate(w / 2, 0);
-
-      // asphalt
-      ctx.fillStyle = '#2c2c2c';
-      ctx.fillRect(-road.width / 2, 0, road.width, h);
-
-      // side lines
-      ctx.fillStyle = '#e0e0e0';
-      ctx.fillRect(-road.width / 2 + 10, 0, 6, h);
-      ctx.fillRect(road.width / 2 - 16, 0, 6, h);
-
-      // lane markers
-      const laneWidth = road.width / road.laneCount;
-      ctx.strokeStyle = '#f8f8f8';
-      ctx.lineWidth = 4;
-      ctx.setLineDash([25, 25]);
-      for (let i = 1; i < road.laneCount; i++) {
-        ctx.beginPath();
-        const x = -road.width / 2 + i * laneWidth;
-        ctx.moveTo(x, -40 + road.lineOffset);
-        ctx.lineTo(x, h + 40 + road.lineOffset);
-        ctx.stroke();
-      }
-      ctx.restore();
+    function projectPoint(xWorld, zWorld) {
+      const cameraHeight = 2.0;
+      const fov = 90;
+      const perspective = 1 / Math.max(0.0001, (zWorld + cameraHeight) * 0.02);
+      const screenX = w / 2 + xWorld * road.laneWidth * perspective * 60;
+      const screenY = h * 0.85 - zWorld * 0.8;
+      return { x: screenX, y: screenY, scale: perspective };
     }
 
-    function drawPlane() {
-      ctx.save();
-      ctx.translate(plane.x, plane.y);
-      ctx.fillStyle = plane.color;
-      // body
-      ctx.fillRect(-plane.width / 2, -plane.height / 2, plane.width, plane.height);
-      // nose
+    function drawSky() {
+      const grd = ctx.createLinearGradient(0, 0, 0, h);
+      grd.addColorStop(0, '#123b5a');
+      grd.addColorStop(1, '#0b1d2a');
+      ctx.fillStyle = grd;
+      ctx.fillRect(0, 0, w, h);
+    }
+
+    function drawRunway() {
+      const bottomWidth = w * 0.9;
+      const topWidth = w * 0.25;
+      const horizonY = h * 0.35;
+      const bottomY = h;
+      ctx.fillStyle = '#2c2c2c';
       ctx.beginPath();
-      ctx.moveTo(-plane.width / 2, -plane.height / 2);
-      ctx.lineTo(plane.width / 2, -plane.height / 2);
-      ctx.lineTo(0, -plane.height / 2 - 16);
+      ctx.moveTo((w - bottomWidth) / 2, bottomY);
+      ctx.lineTo((w + bottomWidth) / 2, bottomY);
+      ctx.lineTo((w + topWidth) / 2, horizonY);
+      ctx.lineTo((w - topWidth) / 2, horizonY);
       ctx.closePath();
       ctx.fill();
-      // wings
-      ctx.fillRect(-plane.width - 10, -plane.height / 3, plane.width * 2 + 20, plane.height / 6);
-      // tail
-      ctx.fillRect(-plane.width / 4, plane.height / 2 - 10, plane.width / 2, 16);
+
+      // center lines perspective
+      ctx.strokeStyle = '#f8f8f8';
+      ctx.lineWidth = 2;
+      ctx.setLineDash([20, 20]);
+      ctx.beginPath();
+      ctx.moveTo(w / 2, bottomY);
+      ctx.lineTo(w / 2, horizonY);
+      ctx.stroke();
+      ctx.setLineDash([]);
+
+      // lane markers
+      ctx.strokeStyle = '#d5d5d5';
+      ctx.lineWidth = 1.5;
+      const lanes = road.laneCount;
+      for (let i = 1; i < lanes; i++) {
+        const t = i / lanes;
+        const xBottom = (w - bottomWidth) / 2 + bottomWidth * t;
+        const xTop = (w - topWidth) / 2 + topWidth * t;
+        ctx.setLineDash([16, 16]);
+        ctx.beginPath();
+        ctx.moveTo(xBottom, bottomY);
+        ctx.lineTo(xTop, horizonY);
+        ctx.stroke();
+        ctx.setLineDash([]);
+      }
+    }
+
+    function drawObstacles() {
+      for (const o of obstacles) {
+        const proj = projectPoint(o.lane * road.laneWidth, o.z);
+        const size = 40 * proj.scale + 10;
+        ctx.fillStyle = '#ff5757';
+        ctx.strokeStyle = '#ffb5b5';
+        ctx.lineWidth = 2;
+        ctx.fillRect(proj.x - size / 2, proj.y - size, size, size * 1.2);
+        ctx.strokeRect(proj.x - size / 2, proj.y - size, size, size * 1.2);
+      }
+    }
+
+    function drawCockpit() {
+      ctx.save();
+      ctx.fillStyle = '#1a1f2b';
+      ctx.fillRect(0, h * 0.65, w, h * 0.35);
+
+      // window frame
+      ctx.strokeStyle = '#1f2f4f';
+      ctx.lineWidth = 18;
+      ctx.strokeRect(30, 30, w - 60, h * 0.6);
+
+      // left and right window dividers
+      ctx.lineWidth = 8;
+      ctx.beginPath();
+      ctx.moveTo(w * 0.35, 30);
+      ctx.lineTo(w * 0.45, h * 0.65);
+      ctx.moveTo(w * 0.65, 30);
+      ctx.lineTo(w * 0.55, h * 0.65);
+      ctx.stroke();
+
+      // dashboard
+      ctx.fillStyle = '#1c2633';
+      ctx.fillRect(0, h * 0.78, w, h * 0.22);
+
+      // BA livery stripes
+      ctx.fillStyle = '#002f6c';
+      ctx.fillRect(0, h * 0.78, w, 18);
+      ctx.fillStyle = '#ba0c2f';
+      ctx.fillRect(0, h * 0.79, w, 8);
+
+      // British Airways logo text
+      ctx.fillStyle = '#e6e6e6';
+      ctx.font = '18px sans-serif';
+      ctx.fillText('British Airways | Airbus A380 Cockpit', 18, h * 0.76);
+
+      // simple instruments
+      ctx.fillStyle = '#0d1118';
+      ctx.fillRect(w * 0.35, h * 0.82, w * 0.3, h * 0.12);
+      ctx.strokeStyle = '#2f80ed';
+      ctx.lineWidth = 2;
+      ctx.strokeRect(w * 0.35, h * 0.82, w * 0.3, h * 0.12);
+      ctx.fillStyle = '#7cf3ff';
+      ctx.font = '16px monospace';
+      ctx.fillText('SPD ' + (plane.speed * 3.6).toFixed(0) + ' KT', w * 0.37, h * 0.85);
+      ctx.fillText('HDG ' + (plane.x * 10).toFixed(0) + '°', w * 0.37, h * 0.88);
+      ctx.fillText('ALT 000', w * 0.37, h * 0.91);
+
       ctx.restore();
     }
 
@@ -180,8 +267,10 @@
       last = t;
       update(dt);
       ctx.clearRect(0, 0, w, h);
-      drawRoad();
-      drawPlane();
+      drawSky();
+      drawRunway();
+      drawObstacles();
+      drawCockpit();
       requestAnimationFrame(loop);
     }
     requestAnimationFrame(loop);
